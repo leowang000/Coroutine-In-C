@@ -1,0 +1,60 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"jsonFile" : "directory-.-Debug-f5ebdc15457944623624.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.22"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "coroutine_in_c",
+					"targetIndexes" : 
+					[
+						0
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "coroutine_in_c::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-coroutine_in_c-Debug-010de5d4c43f2b193a4e.json",
+					"name" : "coroutine_in_c",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "/mnt/d/1\u5927\u5b66\u5b66\u4e60/\u5927\u4e8c/\u5927\u4e8c-2/\u8bfe\u7a0b/\u9ad8\u7ea7\u7f16\u8bd1\u5668\u8bfe\u7a0b\u8bbe\u8ba1/\u534f\u7a0b/coroutine-in-c/cmake-build-debug",
+		"source" : "/mnt/d/1\u5927\u5b66\u5b66\u4e60/\u5927\u4e8c/\u5927\u4e8c-2/\u8bfe\u7a0b/\u9ad8\u7ea7\u7f16\u8bd1\u5668\u8bfe\u7a0b\u8bbe\u8ba1/\u534f\u7a0b/coroutine-in-c"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 3
+	}
+}
