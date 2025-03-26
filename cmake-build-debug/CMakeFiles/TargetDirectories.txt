@@ -1,3 +1,0 @@
-/mnt/d/1大学学习/大二/大二-2/课程/高级编译器课程设计/协程/coroutine-in-c/cmake-build-debug/CMakeFiles/coroutine_in_c.dir
-/mnt/d/1大学学习/大二/大二-2/课程/高级编译器课程设计/协程/coroutine-in-c/cmake-build-debug/CMakeFiles/edit_cache.dir
-/mnt/d/1大学学习/大二/大二-2/课程/高级编译器课程设计/协程/coroutine-in-c/cmake-build-debug/CMakeFiles/rebuild_cache.dir
