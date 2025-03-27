@@ -1,5 +1,5 @@
-#ifndef COROUTINE_IN_C_TEST1_H
-#define COROUTINE_IN_C_TEST1_H
+#ifndef COROUTINE_IN_C_PRODUCER_CONSUMER_H
+#define COROUTINE_IN_C_PRODUCER_CONSUMER_H
 
 #include <coroutine.h>
 
@@ -308,4 +308,4 @@ static inline Item* q_pop(Queue *queue) {
   return item;
 }
 
-#endif //COROUTINE_IN_C_TEST1_H
+#endif //COROUTINE_IN_C_PRODUCER_CONSUMER_H

@@ -35,6 +35,8 @@ enum co_status {
 
 struct list;
 
+typedef struct list_node waiter_list_node;
+
 struct co {
   char *name;
   void (*func)(void *);
@@ -42,20 +44,19 @@ struct co {
   enum co_status status;
   jmp_buf context;
   uint8_t *stack;
-  struct list_node *waiter_list_head;
+  waiter_list_node *waiter_list_head;
   struct list_node *prev; // the position in ready_list/waiting_list/dead_list
 };
 
 struct co *current;
 
+struct list_node {
+  struct list_node *next;
+  struct co *co;
+};
+
 struct list {
   int len;
-
-  struct list_node {
-    struct list_node *next;
-    struct co *co;
-  };
-
   struct list_node *head;
   struct list_node *tail;
 };
@@ -129,11 +130,10 @@ static void cleanup_();
 
 __attribute__ ((constructor))
 static void initialize_() {
-  current = co_start("main", NULL, NULL);
   list_init_(&ready_list);
   list_init_(&waiting_list);
   list_init_(&dead_list);
-  current->status = CO_RUNNING;
+  current = co_start("main", NULL, NULL);
 }
 
 struct co *co_start(const char *name, void (*func)(void *), void *arg) {
@@ -154,6 +154,7 @@ struct co *co_start(const char *name, void (*func)(void *), void *arg) {
   if (node == NULL) {
     panic("malloc for node fails");
   }
+  node->co = co;
   list_push_back_(&ready_list, node);
   return co;
 }
@@ -163,12 +164,12 @@ static inline void stack_switch_call_(void *sp, void *entry, void *arg) {
 #if __x86_64__
       "movq %0, %%rsp; movq %2, %%rdi; jmp *%1"
       :
-      : "b"(((uintptr_t) sp) & ~0xF), "d"(entry), "a"(arg)
+      : "b"((uintptr_t) sp - 8), "d"(entry), "a"(arg)
       : "memory"
 #else
     "movl %0, %%esp; movl %2, 4(%0); jmp *%1"
     :
-    : "b"(((uintptr_t) sp) & ~0x3 - 8), "d"(entry), "a"(arg)
+    : "b"((uintptr_t) sp - 8), "d"(entry), "a"(arg)
     : "memory"
 #endif
       );
@@ -182,7 +183,7 @@ static void schedule_to_(struct co *co) {
       if (current->stack == NULL) {
         panic("malloc for co->stack fails");
       }
-      stack_switch_call_(current->stack + COROUTINE_STACK_SIZE - 1, co_wrapper_, current);
+      stack_switch_call_(current->stack + COROUTINE_STACK_SIZE, co_wrapper_, current);
     case CO_RUNNING:
       longjmp(current->context, 1);
     case CO_WAITING:
@@ -208,13 +209,13 @@ static void co_wrapper_(struct co *co) {
   co->func(co->arg);
   co->status = CO_DEAD;
   list_push_back_(&dead_list, list_erase_(&ready_list, belong_node_(current)));
-  for (struct list_node *waiter_node = co->waiter_list_head; waiter_node != NULL; waiter_node = waiter_node->next) {
+  for (waiter_list_node *waiter_node = co->waiter_list_head; waiter_node != NULL; waiter_node = waiter_node->next) {
     waiter_node->co->status = CO_RUNNING;
-    list_push_back_(&ready_list, list_erase_(&waiting_list, waiter_node));
+    list_push_back_(&ready_list, list_erase_(&waiting_list, belong_node_(waiter_node->co)));
   }
   list_free_(co->waiter_list_head);
   co->waiter_list_head = NULL;
-  stack_switch_call_(runtime_stack + RUNTIME_STACK_SIZE - 1, dead_handler_, co);
+  stack_switch_call_(runtime_stack + RUNTIME_STACK_SIZE, dead_handler_, co);
 }
 
 void co_yield() {
@@ -233,7 +234,7 @@ void co_wait(struct co *co) {
   }
   current->status = CO_WAITING;
   list_push_back_(&waiting_list, list_erase_(&ready_list, belong_node_(current)));
-  struct list_node *waiter_node = malloc(sizeof(struct list_node));
+  waiter_list_node *waiter_node = malloc(sizeof(waiter_list_node));
   if (waiter_node == NULL) {
     panic("malloc for waiter_node fails");
   }
@@ -256,8 +257,7 @@ void co_resume(struct co *co) {
       }
       break;
     case CO_WAITING:
-      co_wait(co);
-      break;
+      panic("resuming a coroutine of status CO_WAITING"); // TODO: cascading wait
     case CO_DEAD:
       break;
   }
