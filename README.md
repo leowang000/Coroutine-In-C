@@ -11,8 +11,6 @@ This is the core data structure representing a coroutine. It holds information a
 - `CO_WAITING`: The coroutine is waiting for another coroutine to finish.
 - `CO_DEAD`: The coroutine has finished execution and is no longer active.
 
----
-
 ## API
 
 ### `co_start`
@@ -32,8 +30,6 @@ coroutine_t *co_start(const char *name, void (*func)(void *), void *arg);
   coroutine_t *my_coroutine = co_start("my_coroutine", my_function, my_argument);
   ```
 
----
-
 ### `co_yield`
 
 ```c
@@ -46,8 +42,6 @@ void co_yield();
   ```c
   co_yield();  // Yield control to another coroutine
   ```
-
----
 
 ### `co_wait`
 
@@ -64,8 +58,6 @@ void co_wait(coroutine_t *co);
   co_wait(another_coroutine);  // Wait for 'another_coroutine' to finish
   ```
 
----
-
 ### `co_resume`
 
 ```c
@@ -80,8 +72,6 @@ void co_resume(coroutine_t *co);
   ```c
   co_resume(another_coroutine);  // Resume 'another_coroutine'
   ```
-
----
 
 ### `co_free`
 
@@ -98,8 +88,6 @@ void co_free(coroutine_t *co);
   co_free(another_coroutine);  // Free 'another_coroutine' after it finishes
   ```
 
----
-
 ## Notes
 
 - **Stack Management**: Each coroutine has its own stack (`COROUTINE_STACK_SIZE = 32KB`) that is used during its execution.
@@ -107,8 +95,6 @@ void co_free(coroutine_t *co);
 - **Memory Allocation**: The library uses dynamic memory allocation (`malloc`) for coroutines, stacks, and other internal structures. It is important to call `co_free` for each coroutine after it has finished to avoid memory leaks.
 
 - **Concurrency**: The library uses cooperative multitasking, meaning that coroutines yield control only when `co_yield` is called.
-
----
 
 ## Example Usage
 
