@@ -67,6 +67,8 @@ static void list_init_(struct list *list) {
   if (list->head == NULL) {
     panic("malloc for list->head fails");
   }
+  list->head->next = NULL;
+  list->head->co = NULL;
   list->tail = list->head;
 }
 

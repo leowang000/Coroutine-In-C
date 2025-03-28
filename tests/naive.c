@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <malloc.h>
 #include "coroutine.h"
 
 int g_count = 0;
@@ -28,6 +29,19 @@ static void work(void *arg) {
 static void test_1() {
   coroutine_t *thd1 = co_start("thread-1", work, "X");
   coroutine_t *thd2 = co_start("thread-2", work, "Y");
+  co_wait(thd1);
+  co_wait(thd2);
+  co_free(thd1);
+  co_free(thd2);
+}
+
+static void simple_work(void *arg) {
+  co_yield();
+}
+
+static void simple() {
+  coroutine_t *thd1 = co_start("thread-1", simple_work, "X");
+  coroutine_t *thd2 = co_start("thread-2", simple_work, "Y");
   co_wait(thd1);
   co_wait(thd2);
   co_free(thd1);
