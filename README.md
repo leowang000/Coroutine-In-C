@@ -90,7 +90,7 @@ void co_free(coroutine_t *co);
 
 ## Notes
 
-- **Stack Management**: Each coroutine has its own stack (`COROUTINE_STACK_SIZE = 32KB`) that is used during its execution.
+- **Stack Management**: Each coroutine has its own stack (`GOROUTINE_STACK_SIZE = 32KB`) that is used during its execution.
 
 - **Memory Allocation**: The library uses dynamic memory allocation (`malloc`) for coroutines, stacks, and other internal structures. It is important to call `co_free` for each coroutine after it has finished to avoid memory leaks.
 
