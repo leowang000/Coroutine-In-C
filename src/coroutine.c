@@ -26,8 +26,9 @@
 #define GOROUTINE_STACK_SIZE (32 * 1024) // 32KB
 #define RUNTIME_STACK_SIZE (4 * 1024)    // 4KB
 #define LOCAL_QUEUE_CAPACITY 256
-#define MAX_GOROUTINES 10000
-#define MAX_PROCESSORS 8
+#define MAX_GOROUTINES 15000
+#define LOGICAL_CORE_CNT 32
+#define MAX_PROCESSORS (LOGICAL_CORE_CNT - 1)
 
 typedef struct WaiterListNode WaiterListNode;
 typedef struct LocalQueue LocalQueue;
@@ -46,6 +47,7 @@ static void local_queue_init(LocalQueue *local_queue);
 static void local_queue_cleanup(LocalQueue *local_queue);
 static bool local_queue_push(LocalQueue *local_queue, Goroutine *g);
 static Goroutine *local_queue_pop(LocalQueue *local_queue);
+static Goroutine *local_queue_pop_back(LocalQueue *local_queue);
 static int local_queue_size(LocalQueue *local_queue);
 static Goroutine *local_queue_front(LocalQueue *local_queue);
 
@@ -55,6 +57,7 @@ static void global_queue_node_destroy(GlobalQueueNode *global_queue_node);
 static GlobalQueue *global_queue_create();
 static void global_queue_destroy(GlobalQueue *global_queue);
 static void global_queue_push(GlobalQueue *global_queue, Goroutine *g);
+static void global_queue_push_no_lock(GlobalQueue *global_queue, Goroutine *g);
 static Goroutine *global_queue_pop(GlobalQueue *global_queue);
 static Goroutine *global_queue_pop_no_lock(GlobalQueue *global_queue);
 
@@ -142,6 +145,17 @@ static Goroutine *local_queue_pop(LocalQueue *local_queue) {
   return g;
 }
 
+// The ownership of the popped goroutine is transferred out from the local_queue.
+static Goroutine *local_queue_pop_back(LocalQueue *local_queue) {
+  if (local_queue->tail == local_queue->head) {
+    return NULL;
+  }
+  int back = (local_queue->tail - 1 + (1 + LOCAL_QUEUE_CAPACITY)) % (1 + LOCAL_QUEUE_CAPACITY);
+  Goroutine *g = local_queue->queue[back];
+  local_queue->tail = back;
+  return g;
+}
+
 static int local_queue_size(LocalQueue *local_queue) {
   return (local_queue->tail - local_queue->head + (1 + LOCAL_QUEUE_CAPACITY)) % (1 + LOCAL_QUEUE_CAPACITY);
 }
@@ -222,6 +236,11 @@ static void global_queue_destroy(GlobalQueue *global_queue) {
 
 static void global_queue_push(GlobalQueue *global_queue, Goroutine *g) {
   pthread_mutex_lock(&global_queue->lock);
+  global_queue_push_no_lock(global_queue, g);
+  pthread_mutex_unlock(&global_queue->lock);
+}
+
+static void global_queue_push_no_lock(GlobalQueue *global_queue, Goroutine *g) {
   GlobalQueueNode *node = global_queue_node_create(NULL, g);
   if (global_queue->size == 0) {
     global_queue->head = node;
@@ -232,7 +251,6 @@ static void global_queue_push(GlobalQueue *global_queue, Goroutine *g) {
   }
   global_queue->size++;
   pthread_cond_signal(&global_queue->not_empty_cond);
-  pthread_mutex_unlock(&global_queue->lock);
 }
 
 // The popped queue node is freed, but the ownership of its inner goroutine is moved out from the global queue.
@@ -530,28 +548,40 @@ void *g0_function(void *m) {
     panic("Error occurs when setting key for thread-%d", machine->id);
   }
   while (atomic_load_explicit(&g_scheduler.status, memory_order_acquire) == SCHEDULER_RUNNING) {
-    if (local_queue_size(&machine->p->local_queue) == 0) {
-      Goroutine *next_g = global_queue_pop(g_scheduler.global_queue);
-      if (next_g == NULL) {
-        pthread_mutex_lock(&g_scheduler.global_queue->lock);
-        while (g_scheduler.global_queue->size == 0 &&
-               atomic_load_explicit(&g_scheduler.status, memory_order_acquire) == SCHEDULER_RUNNING) {
-          pthread_cond_wait(&g_scheduler.global_queue->not_empty_cond, &g_scheduler.global_queue->lock);
-        }
-        if (atomic_load_explicit(&g_scheduler.status, memory_order_acquire) != SCHEDULER_RUNNING) {
-          // The current thread is woken up by the main thread in the destructor.
-          pthread_mutex_unlock(&g_scheduler.global_queue->lock);
+    int avg = atomic_load_explicit(&g_scheduler.active_g_cnt, memory_order_acquire) / MAX_PROCESSORS;
+    int target = (avg + 1 > LOCAL_QUEUE_CAPACITY ? LOCAL_QUEUE_CAPACITY : avg + 1);
+    if (local_queue_size(&machine->p->local_queue) <= target / 2) {
+      pthread_mutex_lock(&g_scheduler.global_queue->lock);
+      while (local_queue_size(&machine->p->local_queue) < target) {
+        Goroutine *new_g = global_queue_pop_no_lock(g_scheduler.global_queue);
+        if (new_g == NULL) {
           break;
         }
-        next_g = global_queue_pop_no_lock(g_scheduler.global_queue);
-        pthread_mutex_unlock(&g_scheduler.global_queue->lock);
+        local_queue_push(&machine->p->local_queue, new_g);
       }
-      local_queue_push(&machine->p->local_queue, next_g);
+      pthread_mutex_unlock(&g_scheduler.global_queue->lock);
+    }
+    if (local_queue_size(&machine->p->local_queue) == 0) {
+      pthread_mutex_lock(&g_scheduler.global_queue->lock);
+      while (g_scheduler.global_queue->size == 0 &&
+             atomic_load_explicit(&g_scheduler.status, memory_order_acquire) == SCHEDULER_RUNNING) {
+        pthread_cond_wait(&g_scheduler.global_queue->not_empty_cond, &g_scheduler.global_queue->lock);
+      }
+      if (atomic_load_explicit(&g_scheduler.status, memory_order_acquire) != SCHEDULER_RUNNING) {
+        // The current thread is woken up by the main thread in the destructor.
+        pthread_mutex_unlock(&g_scheduler.global_queue->lock);
+        break;
+      }
+      Goroutine *new_g = global_queue_pop_no_lock(g_scheduler.global_queue);
+      pthread_mutex_unlock(&g_scheduler.global_queue->lock);
+      assert(new_g != NULL);
+      local_queue_push(&machine->p->local_queue, new_g);
     }
     if (setjmp(machine->g0->context) == 0) {
       schedule_to(local_queue_front(&machine->p->local_queue));
     }
     if (machine->g_waiting != NULL) {
+      // Scheduled back from co_wait.
       pthread_mutex_unlock(&machine->g_waiting->status_lock);
       machine->g_waiting = NULL;
     }
@@ -608,6 +638,7 @@ static void g_wrapper(Goroutine *g) {
   pthread_mutex_lock(&g->status_lock);
   g->status = GOROUTINE_DEAD;
   atomic_fetch_sub_explicit(&g_scheduler.active_g_cnt, 1, memory_order_release);
+  pthread_mutex_lock(&g_scheduler.global_queue->lock);
   for (WaiterListNode *waiter = g->waiter_list_head; waiter != NULL; waiter = waiter->next) {
     pthread_mutex_lock(&waiter->g->status_lock);
     waiter->g->status = GOROUTINE_RUNNING;
@@ -617,10 +648,11 @@ static void g_wrapper(Goroutine *g) {
       pthread_cond_signal(&g_scheduler.main_wait_cond);
       pthread_mutex_unlock(&g_scheduler.main_wait_lock);
     } else {
-      global_queue_push(g_scheduler.global_queue, waiter->g);
+      global_queue_push_no_lock(g_scheduler.global_queue, waiter->g);
     }
     pthread_mutex_unlock(&waiter->g->status_lock);
   }
+  pthread_mutex_unlock(&g_scheduler.global_queue->lock);
   WaiterListNode *cur = g->waiter_list_head;
   while (cur != NULL) {
     WaiterListNode *next = cur->next;
@@ -637,12 +669,27 @@ Goroutine *co_start(const char *name, void (*func)(void *), void *arg) {
   if (atomic_load_explicit(&g_scheduler.status, memory_order_acquire) == SCHEDULER_INIT) {
     scheduler_init();
   }
-  if (atomic_load_explicit(&g_scheduler.active_g_cnt, memory_order_acquire) >= MAX_GOROUTINES) {
+  int active = atomic_load_explicit(&g_scheduler.active_g_cnt, memory_order_acquire);
+  if (active >= MAX_GOROUTINES) {
     panic("Too much goroutines.");
   }
   Goroutine *g = goroutine_create(name, func, arg);
-  if (current_m() == &g_scheduler.m_main || !local_queue_push(&current_p()->local_queue, g)) {
+  if (current_m() == &g_scheduler.m_main) {
     global_queue_push(g_scheduler.global_queue, g);
+  } else {
+    LocalQueue *local_queue = &current_p()->local_queue;
+    int avg = active / MAX_PROCESSORS;
+    int target = (avg + 1 > LOCAL_QUEUE_CAPACITY ? LOCAL_QUEUE_CAPACITY : avg + 1);
+    if (local_queue_size(local_queue) + 1 >= 1.5 * target) {
+      pthread_mutex_lock(&g_scheduler.global_queue->lock);
+      global_queue_push_no_lock(g_scheduler.global_queue, g);
+      while (local_queue_size(local_queue) > target) {
+        global_queue_push_no_lock(g_scheduler.global_queue, local_queue_pop_back(local_queue));
+      }
+      pthread_mutex_unlock(&g_scheduler.global_queue->lock);
+    } else if (!local_queue_push(local_queue, g)) {
+      global_queue_push(g_scheduler.global_queue, g);
+    }
   }
   atomic_fetch_add_explicit(&g_scheduler.active_g_cnt, 1, memory_order_release);
   return g;

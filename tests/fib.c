@@ -37,8 +37,8 @@ void fibonacci(void *arg) {
   task2->n = task->n - 2;
 
   // 启动两个子协程
-  coroutine_t *co1 = co_start("fib-1", fibonacci, task1);
-  coroutine_t *co2 = co_start("fib-2", fibonacci, task2);
+  coroutine_t co1 = co_start("fib-1", fibonacci, task1);
+  coroutine_t co2 = co_start("fib-2", fibonacci, task2);
 
   // 等待两个子协程完成
   co_wait(co1);
@@ -65,7 +65,7 @@ int main() {
 
     printf("计算斐波那契数 F(%d)...\n", n);
 
-    coroutine_t *co = co_start("fib-root", fibonacci, &task);
+    coroutine_t co = co_start("fib-root", fibonacci, &task);
     co_wait(co);
 
     unsigned long long expected = expected_fib(n);

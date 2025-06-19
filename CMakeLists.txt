@@ -4,6 +4,7 @@ project(coroutine-in-c C)
 set(CMAKE_C_STANDARD 11)
 
 add_compile_options(-U_FORTIFY_SOURCE)
+add_compile_options(-O2)
 
 add_library(coroutine SHARED src/coroutine.c)
 target_include_directories(coroutine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

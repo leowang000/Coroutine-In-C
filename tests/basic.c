@@ -20,8 +20,8 @@ void simple_coroutine(void *arg) {
 void test_basic_yield() {
   printf("\n=== Test Basic Yield ===\n");
 
-  coroutine_t *co1 = co_start("test1", simple_coroutine, (void*)(size_t)1);
-  coroutine_t *co2 = co_start("test2", simple_coroutine, (void*)(size_t)2);
+  coroutine_t co1 = co_start("test1", simple_coroutine, (void*)(size_t)1);
+  coroutine_t co2 = co_start("test2", simple_coroutine, (void*)(size_t)2);
 
   printf("Created two coroutines\n");
 
@@ -50,8 +50,8 @@ void test_shared_data() {
 
   int shared_counter = 0;
 
-  coroutine_t *co1 = co_start("counter1", counting_coroutine, &shared_counter);
-  coroutine_t *co2 = co_start("counter2", counting_coroutine, &shared_counter);
+  coroutine_t co1 = co_start("counter1", counting_coroutine, &shared_counter);
+  coroutine_t co2 = co_start("counter2", counting_coroutine, &shared_counter);
 
   co_yield();
 
@@ -74,7 +74,7 @@ void recursive_coroutine(void *arg) {
   printf("Recursion depth: %d\n", depth);
 
   // 创建子协程
-  coroutine_t *child = co_start("recursive_child", recursive_coroutine,
+  coroutine_t child = co_start("recursive_child", recursive_coroutine,
                               (void*)(size_t)(depth - 1));
   co_wait(child);
 
@@ -84,7 +84,7 @@ void recursive_coroutine(void *arg) {
 void test_recursive_coroutines() {
   printf("\n=== Test Recursive Coroutines ===\n");
 
-  coroutine_t *root = co_start("recursive_root", recursive_coroutine,
+  coroutine_t root = co_start("recursive_root", recursive_coroutine,
                              (void*)(size_t)100);
 
   co_wait(root);

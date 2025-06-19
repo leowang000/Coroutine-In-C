@@ -12,7 +12,7 @@ typedef struct {
 } ComputeTask;
 
 void compute_factorial(void *arg) {
-  ComputeTask *task = (ComputeTask*)arg;
+  ComputeTask *task = (ComputeTask *) arg;
 
   unsigned long long factorial = 1;
   // 计算小阶乘，避免溢出
@@ -41,12 +41,11 @@ unsigned long long expected_factorial(int n) {
   return result;
 }
 
-int main() {
+ComputeTask tasks[NUM_COROUTINES];
+coroutine_t coroutines[NUM_COROUTINES];
+
+void omain(void *) {
   printf("独立计算测试开始\n");
-
-  ComputeTask tasks[NUM_COROUTINES];
-  coroutine_t *coroutines[NUM_COROUTINES];
-
   // 创建多个执行独立计算的协程
   for (int i = 0; i < NUM_COROUTINES; i++) {
     tasks[i].id = i;
@@ -69,5 +68,10 @@ int main() {
   }
 
   printf("独立计算测试通过\n");
+}
+
+int main() {
+  coroutine_t g_main = co_start("main", omain, NULL);
+  co_wait(g_main);
   return 0;
 }

@@ -6,8 +6,8 @@
 
 // 可配置参数
 #define DEFAULT_NUM_COROUTINES 10000  // 已确定为10000个协程
-#define DEFAULT_MIN_WORK 100          // 最小工作量
-#define DEFAULT_MAX_WORK 50000        // 最大工作量
+#define DEFAULT_MIN_WORK 1000          // 最小工作量
+#define DEFAULT_MAX_WORK 500000        // 最大工作量
 #define BATCH_COUNT 20                // 增加批次数以平滑进度报告
 #define NUMBERS_PER_ITERATION 5       // 保持不变
 #define YIELD_FREQUENCY 10            // 增大以减少上下文切换频率
@@ -26,13 +26,13 @@ long long compute_cube_sum(int start, int count) {
   long long sum = 0;
   for (int i = 0; i < count; i++) {
     int value = start + i;
-    sum += (long long)value * value * value;
+    sum += (long long) value * value * value;
   }
   return sum;
 }
 
 void stress_task(void *arg) {
-  Task *task = (Task*)arg;
+  Task *task = (Task *) arg;
 
   // 执行实际工作 - 计算立方和
   int start_num = task->id * TASK_ID_MULTIPLIER + 1;
@@ -53,6 +53,9 @@ void stress_task(void *arg) {
 }
 
 int main(int argc, char *argv[]) {
+  struct timespec start, end;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+
   // 默认参数
   int num_coroutines = DEFAULT_NUM_COROUTINES;
   int min_work = DEFAULT_MIN_WORK;
@@ -66,7 +69,7 @@ int main(int argc, char *argv[]) {
   // 安全检查
   if (num_coroutines <= 0) num_coroutines = DEFAULT_NUM_COROUTINES;
   if (min_work <= 0) min_work = DEFAULT_MIN_WORK;
-  if (max_work <= min_work) max_work = min_work + DEFAULT_MAX_WORK/4;
+  if (max_work <= min_work) max_work = min_work + DEFAULT_MAX_WORK / 4;
 
   printf("压力测试开始 - 创建%d个协程 (工作量范围: %d-%d)\n",
          num_coroutines, min_work, max_work);
@@ -75,7 +78,7 @@ int main(int argc, char *argv[]) {
   srand(time(NULL));
 
   Task *tasks = malloc(sizeof(Task) * num_coroutines);
-  coroutine_t **coroutines = malloc(sizeof(coroutine_t*) * num_coroutines);
+  coroutine_t *coroutines = malloc(sizeof(coroutine_t) * num_coroutines);
 
   // 初始化任务
   for (int i = 0; i < num_coroutines; i++) {
@@ -106,7 +109,7 @@ int main(int argc, char *argv[]) {
 
   for (int batch = 0; batch < BATCH_COUNT; batch++) {
     int start = batch * batch_size;
-    int end = (batch == BATCH_COUNT-1) ? num_coroutines : (batch + 1) * batch_size;
+    int end = (batch == BATCH_COUNT - 1) ? num_coroutines : (batch + 1) * batch_size;
 
     for (int i = start; i < end; i++) {
       if (i < num_coroutines) {
@@ -114,7 +117,7 @@ int main(int argc, char *argv[]) {
       }
     }
 
-    printf("批次 %d/%d 完成\n", batch+1, BATCH_COUNT);
+    printf("批次 %d/%d 完成\n", batch + 1, BATCH_COUNT);
   }
 
   // 验证所有协程都已完成并且计算正确
@@ -139,6 +142,9 @@ int main(int argc, char *argv[]) {
     }
   }
 
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  double sec = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+
   printf("测试统计: %d/%d 协程完成, %d/%d 计算正确\n",
          completed_count, num_coroutines,
          correct_count, num_coroutines);
@@ -149,5 +155,7 @@ int main(int argc, char *argv[]) {
   free(coroutines);
 
   printf("压力测试通过!\n");
+
+  printf("Total time: %.6f s\n", sec);
   return 0;
 }
