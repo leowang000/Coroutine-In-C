@@ -1,142 +1,110 @@
-# Coroutine In C
+# C Coroutine Library
 
-A toy stackful coroutine implemented in C.
+## Overview
 
-## `coroutine_t`
-This is the core data structure representing a coroutine. It holds information about the coroutine's state, its function, stack, and context. The internal implementation of `coroutine_t` is not exposed to the user.
+This is a lightweight coroutine library implemented in C, designed to provide cooperative multitasking capabilities. The library features:
 
-**Coroutine States**: Each coroutine can have one of the following states:
-- `CO_NEW`: The coroutine is newly created and has not yet been scheduled for execution.
-- `CO_RUNNING`: The coroutine is currently executing.
-- `CO_WAITING`: The coroutine is waiting for another coroutine to finish.
-- `CO_DEAD`: The coroutine has finished execution and is no longer active.
+- **M:N scheduling model** - Coroutines (goroutines) are multiplexed onto a pool of OS threads
+- **Work-stealing scheduler** - Efficient load balancing between processors
+- **Semaphore support** - For synchronization between coroutines
+- **Automatic cleanup** - Built-in destructor handles resource cleanup
 
-## API
+## Features
 
-### `co_start`
+- Create and manage lightweight coroutines
+- Cooperative yielding between coroutines
+- Coroutine waiting/joining
+- Semaphore-based synchronization
+- Multi-processor load balancing
+- Automatic resource cleanup
 
-```c
-coroutine_t *co_start(const char *name, void (*func)(void *), void *arg);
-```
+## API Reference
 
-- **Description**: This function creates a new coroutine. The coroutine is initialized with a given name, a function to execute (`func`), and an argument to pass to the function (`arg`).
-- **Parameters**:
-    - `name`: The name of the coroutine.
-    - `func`: The function that the coroutine will execute.
-    - `arg`: The argument that will be passed to the function.
-- **Returns**: A pointer to the created coroutine.
-- **Example**:
-  ```c
-  coroutine_t *my_coroutine = co_start("my_coroutine", my_function, my_argument);
-  ```
-
-### `co_yield`
+### Coroutine Management
 
 ```c
+// Create a new coroutine
+coroutine_t co_start(const char *name, void (*func)(void *), void *arg);
+
+// Yield execution to another coroutine
 void co_yield();
+
+// Wait for a coroutine to complete
+void co_wait(coroutine_t g);
 ```
 
-- **Description**: This function causes the current running coroutine to yield control, allowing other coroutines to run. The current coroutine is pushed to the back of the ready list, and the scheduler will choose the next coroutine to run.
-- **Usage**: Call this function within a coroutine to voluntarily give up control and allow another coroutine to execute.
-- **Example**:
-  ```c
-  co_yield();  // Yield control to another coroutine
-  ```
-
-### `co_wait`
+### Semaphore Operations
 
 ```c
-void co_wait(coroutine_t *co);
+// Create a semaphore with initial count
+semaphore_t sem_create(int cnt);
+
+// Increment semaphore (V operation)
+void sem_up(semaphore_t sem);
+
+// Decrement semaphore (P operation)
+void sem_down(semaphore_t sem);
+
+// Destroy a semaphore
+void sem_destroy(semaphore_t sem);
 ```
 
-- **Description**: This function causes the current running coroutine to wait for another coroutine (`co`) to finish. The current coroutine is moved to the waiting list and will be resumed once the specified coroutine (`co`) reaches the "dead" state.
-- **Parameters**:
-    - `co`: The coroutine to wait for.
-- **Usage**: Call this function when one coroutine needs to wait for the completion of another.
-- **Example**:
-  ```c
-  co_wait(another_coroutine);  // Wait for 'another_coroutine' to finish
-  ```
-
-### `co_resume`
+## Usage Example
 
 ```c
-void co_resume(coroutine_t *co);
-```
-
-- **Description**: This function resumes a coroutine (`co`) that has finished waiting. Resuming a coroutine that is already dead will have no effect. Resuming a coroutine of status `CO_WAITING` is not allowed.
-- **Parameters**:
-    - `co`: The coroutine to resume.
-- **Usage**: Call this function to resume a coroutine that is currently pending to be executed.
-- **Example**:
-  ```c
-  co_resume(another_coroutine);  // Resume 'another_coroutine'
-  ```
-
-### `co_free`
-
-```c
-void co_free(coroutine_t *co);
-```
-
-- **Description**: This function frees the resources associated with a coroutine (`co`) that has finished executing. The coroutine must be in the "dead" state before it can be freed.
-- **Parameters**:
-    - `co`: The coroutine to free.
-- **Usage**: Call this function to free the memory allocated for a coroutine once it has completed its execution.
-- **Example**:
-  ```c
-  co_free(another_coroutine);  // Free 'another_coroutine' after it finishes
-  ```
-
-## Notes
-
-- **Stack Management**: Each coroutine has its own stack (`GOROUTINE_STACK_SIZE = 32KB`) that is used during its execution.
-
-- **Memory Allocation**: The library uses dynamic memory allocation (`malloc`) for coroutines, stacks, and other internal structures. It is important to call `co_free` for each coroutine after it has finished to avoid memory leaks.
-
-- **Concurrency**: The library uses cooperative multitasking, meaning that coroutines yield control only when `co_yield` is called.
-
-## Example Usage
-
-### Example 1: Basic Coroutine Creation and Yielding
-
-```c
+#include <stdio.h>
 #include "coroutine.h"
 
-void task1(void *arg) {
-  printf("Task 1 started\n");
-  co_yield();
-  printf("Task 1 resumed\n");
-}
+static int counter = 0;
+static semaphore_t sem;
 
-void task2(void *arg) {
-  printf("Task 2 started\n");
-  co_yield();
-  printf("Task 2 resumed\n");
+void counter_task(void *arg) {
+  int id = *(int *)arg;
+
+  for (int i = 0; i < 10; i++) {
+    sem_down(sem);
+    printf("Coroutine %d: counter = %d\n", id, counter);
+    counter++;
+    sem_up(sem);
+    co_yield();
+  }
+
+  printf("Coroutine %d completed\n", id);
 }
 
 int main() {
-  coroutine_t *co1 = co_start("Task 1", task1, NULL);
-  coroutine_t *co2 = co_start("Task 2", task2, NULL);
+  sem = sem_create(1);  // Create mutex semaphore
 
-  co_resume(co1);
-  co_resume(co2);
-  co_resume(co1);
-  co_resume(co2);
+  int id1 = 1, id2 = 2;
+  coroutine_t co1 = co_start("counter-1", counter_task, &id1);
+  coroutine_t co2 = co_start("counter-2", counter_task, &id2);
 
-  co_free(co1);
-  co_free(co2);
+  co_wait(co1);
+  co_wait(co2);
+
+  sem_destroy(sem);
+  printf("Final count: %d\n", counter);
 
   return 0;
 }
 ```
 
-**Output:**
-```
-Task 1 started
-Task 2 started
-Task 1 resumed
-Task 2 resumed
-```
+## Configuration Constants
 
-This example shows how two coroutines (`task1` and `task2`) are created, started, and then resumed after yielding. The `co_yield` function allows the two tasks to run cooperatively.
+The library can be configured using these constants in `coroutine.c`:
+
+| Constant               | Default Value | Description                          |
+|------------------------|---------------|--------------------------------------|
+| `GOROUTINE_STACK_SIZE` | 32KB          | Stack size for each coroutine        |
+| `RUNTIME_STACK_SIZE`   | 4KB           | Runtime stack size                   |
+| `LOCAL_QUEUE_CAPACITY` | 256           | Processor-local queue capacity       |
+| `MAX_GOROUTINES`       | 15000         | Maximum concurrent coroutines        |
+| `LOGICAL_CORE_CNT`     | 32            | Logical core count                   |
+| `MAX_PROCESSORS`       | 31            | Maximum processor threads (cores-1)  |
+
+## Limitations
+
+- Coroutines cannot be canceled once started
+- No built-in channel or message passing mechanism
+- Stack sizes are fixed at creation time
+- Limited to POSIX-compatible systems
