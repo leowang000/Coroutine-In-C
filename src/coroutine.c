@@ -360,7 +360,7 @@ struct Machine {
   /* scheduler information */
   Processor *p; // non-owning reference
   /* tmp */
-  Goroutine *g_waiting; // non-owning reference
+  pthread_mutex_t *tmp_lock;
 };
 
 static void machine_init(Machine *machine, int id, Processor *p) {
@@ -371,7 +371,7 @@ static void machine_init(Machine *machine, int id, Processor *p) {
   machine->g0->status = GOROUTINE_RUNNING;
   machine->cur_g = machine->g0;
   machine->p = p;
-  machine->g_waiting = NULL;
+  machine->tmp_lock = NULL;
 }
 
 static void machine_cleanup(Machine *machine) {
@@ -580,10 +580,10 @@ void *g0_function(void *m) {
     if (setjmp(machine->g0->context) == 0) {
       schedule_to(local_queue_front(&machine->p->local_queue));
     }
-    if (machine->g_waiting != NULL) {
-      // Scheduled back from co_wait.
-      pthread_mutex_unlock(&machine->g_waiting->status_lock);
-      machine->g_waiting = NULL;
+    if (machine->tmp_lock != NULL) {
+      // Scheduled back from co_wait or sem_down.
+      pthread_mutex_unlock(machine->tmp_lock);
+      machine->tmp_lock = NULL;
     }
   }
   return NULL;
@@ -720,12 +720,12 @@ void co_wait(Goroutine *goroutine) {
     panic("No coroutine to wait.");
   }
   Machine *cur_m = current_m();
+  Goroutine *cur_g = current_g();
   if (cur_m == &g_scheduler.m_main) {
     pthread_mutex_lock(&goroutine->status_lock);
     if (goroutine->status == GOROUTINE_DEAD) {
       pthread_mutex_unlock(&goroutine->status_lock);
     } else {
-      Goroutine *cur_g = current_g();
       pthread_mutex_lock(&cur_g->status_lock);
       cur_g->status = GOROUTINE_WAITING;
       pthread_mutex_unlock(&cur_g->status_lock);
@@ -739,13 +739,11 @@ void co_wait(Goroutine *goroutine) {
       }
       pthread_mutex_unlock(&g_scheduler.main_wait_lock);
     }
-    return;
   } else {
     pthread_mutex_lock(&goroutine->status_lock);
     if (goroutine->status == GOROUTINE_DEAD) {
       pthread_mutex_unlock(&goroutine->status_lock);
     } else {
-      Goroutine *cur_g = current_g();
       assert(local_queue_pop(&current_p()->local_queue) == cur_g);
       // If circular co_wait exists, deadlock may occur.
       pthread_mutex_lock(&cur_g->status_lock);
@@ -753,10 +751,177 @@ void co_wait(Goroutine *goroutine) {
       pthread_mutex_unlock(&cur_g->status_lock);
       goroutine->waiter_list_head = waiter_list_node_create(goroutine->waiter_list_head, cur_g);
       // We don't unlock goroutine->status_lock here. We will unlock it when we schedule back to g0.
-      cur_m->g_waiting = goroutine;
+      cur_m->tmp_lock = &goroutine->status_lock;
       if (setjmp(cur_g->context) == 0) {
         schedule_to(cur_m->g0);
       }
     }
   }
+}
+
+typedef struct SemaphoreWaiterListNode SemaphoreWaiterListNode;
+typedef struct SemaphoreWaiterList SemaphoreWaiterList;
+typedef struct Semaphore Semaphore;
+
+static SemaphoreWaiterListNode *semaphore_waiter_list_node_create(SemaphoreWaiterListNode *next, Goroutine *g);
+
+static void semaphore_waiter_list_init(SemaphoreWaiterList *sem_waiter_list);
+static void semaphore_waiter_list_cleanup(SemaphoreWaiterList *sem_waiter_list);
+static void semaphore_waiter_list_push(SemaphoreWaiterList *sem_waiter_list, Goroutine *g);
+static Goroutine *semaphore_waiter_list_pop(SemaphoreWaiterList *sem_waiter_list);
+static bool semaphore_waiter_list_empty(SemaphoreWaiterList *sem_waiter_list);
+
+struct SemaphoreWaiterListNode {
+  SemaphoreWaiterListNode *next;
+  Goroutine *g;
+};
+
+static SemaphoreWaiterListNode *semaphore_waiter_list_node_create(SemaphoreWaiterListNode *next, Goroutine *g) {
+  SemaphoreWaiterListNode *sem_waiter_list_node = malloc(sizeof(SemaphoreWaiterListNode));
+  if (sem_waiter_list_node == NULL) {
+    panic("Malloc for sem_waiter_list_node fails.");
+  }
+  sem_waiter_list_node->next = next;
+  sem_waiter_list_node->g = g;
+  return sem_waiter_list_node;
+}
+
+struct SemaphoreWaiterList {
+  SemaphoreWaiterListNode *head;
+  SemaphoreWaiterListNode *tail;
+};
+
+static void semaphore_waiter_list_init(SemaphoreWaiterList *sem_waiter_list) {
+  sem_waiter_list->head = NULL;
+  sem_waiter_list->tail = NULL;
+}
+
+static void semaphore_waiter_list_cleanup(SemaphoreWaiterList *sem_waiter_list) {
+  SemaphoreWaiterListNode *cur = sem_waiter_list->head;
+  while (cur != NULL) {
+    SemaphoreWaiterListNode *next = cur->next;
+    goroutine_destroy(cur->g);
+    free(cur);
+    cur = next;
+  }
+}
+
+static void semaphore_waiter_list_push(SemaphoreWaiterList *sem_waiter_list, Goroutine *g) {
+  SemaphoreWaiterListNode *waiter_list_node = semaphore_waiter_list_node_create(NULL, g);
+  if (semaphore_waiter_list_empty(sem_waiter_list)) {
+    sem_waiter_list->tail = waiter_list_node;
+    sem_waiter_list->head = waiter_list_node;
+  } else {
+    sem_waiter_list->tail->next = waiter_list_node;
+    sem_waiter_list->tail = waiter_list_node;
+  }
+}
+
+static Goroutine *semaphore_waiter_list_pop(SemaphoreWaiterList *sem_waiter_list) {
+  if (semaphore_waiter_list_empty(sem_waiter_list)) {
+    return NULL;
+  }
+  SemaphoreWaiterListNode *waiter_list_node = sem_waiter_list->head;
+  Goroutine *g = waiter_list_node->g;
+  sem_waiter_list->head = sem_waiter_list->head->next;
+  free(waiter_list_node);
+  return g;
+}
+
+static bool semaphore_waiter_list_empty(SemaphoreWaiterList *sem_waiter_list) {
+  return sem_waiter_list->head == NULL;
+}
+
+struct Semaphore {
+  int cnt;
+  SemaphoreWaiterList waiter_list;
+  pthread_mutex_t lock;
+};
+
+Semaphore *sem_create(int cnt) {
+  Semaphore *sem = malloc(sizeof(Semaphore));
+  if (sem == NULL) {
+    panic("Malloc for sem fails.");
+  }
+  if (pthread_mutex_init(&sem->lock, NULL) != 0) {
+    panic("Error occurs when initializing sem->lock.");
+  }
+  sem->cnt = cnt;
+  semaphore_waiter_list_init(&sem->waiter_list);
+  return sem;
+}
+
+void sem_up(Semaphore *sem) {
+  pthread_mutex_lock(&sem->lock);
+  sem->cnt++;
+  if (sem->cnt > 0) {
+    pthread_mutex_unlock(&sem->lock);
+    return;
+  }
+  Goroutine *waiter = semaphore_waiter_list_pop(&sem->waiter_list);
+  assert(waiter != NULL);
+  pthread_mutex_lock(&g_scheduler.global_queue->lock);
+  pthread_mutex_lock(&waiter->status_lock);
+  waiter->status = GOROUTINE_RUNNING;
+  if (waiter == g_scheduler.m_main.g0) {
+    pthread_mutex_lock(&g_scheduler.main_wait_lock);
+    g_scheduler.main_waiting = false;
+    pthread_cond_signal(&g_scheduler.main_wait_cond);
+    pthread_mutex_unlock(&g_scheduler.main_wait_lock);
+  } else {
+    global_queue_push_no_lock(g_scheduler.global_queue, waiter);
+  }
+  pthread_mutex_unlock(&waiter->status_lock);
+  pthread_mutex_unlock(&g_scheduler.global_queue->lock);
+  pthread_mutex_unlock(&sem->lock);
+}
+
+void sem_down(Semaphore *sem) {
+  pthread_mutex_lock(&sem->lock);
+  sem->cnt--;
+  if (sem->cnt >= 0) {
+    pthread_mutex_unlock(&sem->lock);
+    return;
+  }
+  Machine *cur_m = current_m();
+  Goroutine *cur_g = current_g();
+  semaphore_waiter_list_push(&sem->waiter_list, cur_g);
+  if (cur_m == &g_scheduler.m_main) {
+    pthread_mutex_lock(&cur_g->status_lock);
+    cur_g->status = GOROUTINE_WAITING;
+    pthread_mutex_unlock(&cur_g->status_lock);
+    g_scheduler.main_waiting = true;
+    pthread_mutex_unlock(&sem->lock);
+    // goroutine may exit between these two lines, and main_waiting is set to false, but it doesn't matter.
+    pthread_mutex_lock(&g_scheduler.main_wait_lock);
+    while (g_scheduler.main_waiting) {
+      pthread_cond_wait(&g_scheduler.main_wait_cond, &g_scheduler.main_wait_lock);
+    }
+    pthread_mutex_unlock(&g_scheduler.main_wait_lock);
+  } else {
+    assert(local_queue_pop(&current_p()->local_queue) == cur_g);
+    // If circular dependency exists, deadlock may occur.
+    pthread_mutex_lock(&cur_g->status_lock);
+    cur_g->status = GOROUTINE_WAITING;
+    pthread_mutex_unlock(&cur_g->status_lock);
+    // We don't unlock sem->lock here. We will unlock it when we schedule back to g0.
+    cur_m->tmp_lock = &sem->lock;
+    if (setjmp(cur_g->context) == 0) {
+      schedule_to(cur_m->g0);
+    }
+  }
+}
+
+void sem_destroy(Semaphore *sem) {
+  if (sem == NULL) {
+    return;
+  }
+  pthread_mutex_lock(&sem->lock);
+  if (!semaphore_waiter_list_empty(&sem->waiter_list)) {
+    panic("There are still goroutines waiting for sem");
+  }
+  semaphore_waiter_list_cleanup(&sem->waiter_list);
+  pthread_mutex_unlock(&sem->lock);
+  pthread_mutex_destroy(&sem->lock);
+  free(sem);
 }

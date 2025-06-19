@@ -53,8 +53,6 @@ void stress_task(void *arg) {
 }
 
 int main(int argc, char *argv[]) {
-  struct timespec start, end;
-  clock_gettime(CLOCK_MONOTONIC, &start);
 
   // 默认参数
   int num_coroutines = DEFAULT_NUM_COROUTINES;
@@ -96,6 +94,9 @@ int main(int argc, char *argv[]) {
     tasks[i].result = 0;
   }
 
+  struct timespec start, end;
+  clock_gettime(CLOCK_MONOTONIC, &start);
+
   // 创建所有协程
   for (int i = 0; i < num_coroutines; i++) {
     char name[32];
@@ -120,6 +121,9 @@ int main(int argc, char *argv[]) {
     printf("批次 %d/%d 完成\n", batch + 1, BATCH_COUNT);
   }
 
+  clock_gettime(CLOCK_MONOTONIC, &end);
+  double sec = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+
   // 验证所有协程都已完成并且计算正确
   int success = 1;
   int completed_count = 0;
@@ -141,9 +145,6 @@ int main(int argc, char *argv[]) {
       }
     }
   }
-
-  clock_gettime(CLOCK_MONOTONIC, &end);
-  double sec = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 
   printf("测试统计: %d/%d 协程完成, %d/%d 计算正确\n",
          completed_count, num_coroutines,
